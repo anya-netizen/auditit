@@ -42,7 +42,7 @@ HTML_TEMPLATE = """
     label { display: block; margin: 12px 0 6px; font-weight: 600; }
     input, select { width: 100%; padding: 10px; border: 1px solid #c9cfdb; border-radius: 8px; font-size: 14px; }
     button { margin-top: 16px; padding: 10px 16px; border: 0; border-radius: 8px; background: #2563eb; color: white; font-weight: 700; cursor: pointer; }
-    pre { background: #0f172a; color: #e2e8f0; padding: 14px; border-radius: 8px; overflow-x: auto; }
+    .message { background: #0f172a; color: #e2e8f0; padding: 14px; border-radius: 8px; margin-top: 8px; }
     .error { color: #b91c1c; font-weight: 700; margin-top: 14px; }
     .meta { margin: 10px 0; color: #374151; }
   </style>
@@ -77,7 +77,8 @@ HTML_TEMPLATE = """
 
     {% if status_code is not none %}
       <div class="meta"><strong>Status Code:</strong> {{ status_code }}</div>
-      <pre>{{ response_body }}</pre>
+      <div><strong>Message:</strong></div>
+      <div class="message">{{ response_message }}</div>
     {% endif %}
   </div>
 </body>
@@ -121,9 +122,13 @@ def run_full_audit(pg_company_id: str, cpo_month: str):
         response = requests.post(url, headers=headers, params=params, data="", timeout=120)
         try:
             body = response.json()
+            if isinstance(body, dict):
+                message = str(body.get("message") or body.get("status") or "Request completed.")
+            else:
+                message = "Request completed."
         except Exception:
-            body = response.text
-        return response.status_code, body, None
+            message = response.text.strip() or "Request completed."
+        return response.status_code, message, None
     except requests.RequestException as exc:
         return None, "", f"Request failed: {exc}"
 
@@ -140,7 +145,7 @@ def home():
     selected_month = default_month
     selected_year = default_year
     status_code = None
-    response_body = ""
+    response_message = ""
     error = None
 
     if request.method == "POST":
@@ -152,8 +157,7 @@ def home():
         if not pg_company_id or not selected_month or not selected_year:
             error = "Please enter PG Company ID and choose CPO month/year."
         else:
-            status_code, body, error = run_full_audit(pg_company_id, cpo_month)
-            response_body = body if isinstance(body, str) else str(body)
+            status_code, response_message, error = run_full_audit(pg_company_id, cpo_month)
 
     return render_template_string(
         HTML_TEMPLATE,
@@ -164,7 +168,7 @@ def home():
         selected_month=selected_month,
         selected_year=selected_year,
         status_code=status_code,
-        response_body=response_body,
+        response_message=response_message,
         error=error,
     )
 
