@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 from flask import Flask, render_template_string, request
@@ -9,6 +10,7 @@ BASE_URL = "https://dawavorderpatient-prod-bdfncsb7dwe9fdd3.eastus-01.azurewebsi
 ENTITY_BASE_URL = "https://dawaventity-prod-dfckf6d0h0bbh9bt.eastus-01.azurewebsites.net"
 CREATED_BY = "system"
 PG_NAME_CACHE = {}
+MAX_WORKERS = 6
 MONTH_OPTIONS = [
     "January",
     "February",
@@ -211,10 +213,29 @@ def fetch_jobs_status():
         jobs = payload.get("jobs", []) if isinstance(payload, dict) else []
         jobs = jobs[:10]
 
+        # Resolve unique PG names in parallel to speed up jobs rendering.
+        unique_pg_ids = {
+            str(job.get("pgCompanyId") or "").strip()
+            for job in jobs
+            if str(job.get("pgCompanyId") or "").strip()
+        }
+        unresolved_pg_ids = [pg_id for pg_id in unique_pg_ids if pg_id not in PG_NAME_CACHE]
+
+        if unresolved_pg_ids:
+            worker_count = min(MAX_WORKERS, len(unresolved_pg_ids))
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                future_map = {executor.submit(get_pg_name, pg_id, service_key): pg_id for pg_id in unresolved_pg_ids}
+                for future in as_completed(future_map):
+                    pg_id = future_map[future]
+                    try:
+                        PG_NAME_CACHE[pg_id] = future.result()
+                    except Exception:
+                        PG_NAME_CACHE[pg_id] = pg_id
+
         summary_rows = []
         for job in jobs:
             pg_company_id = str(job.get("pgCompanyId") or "").strip()
-            pg_name = get_pg_name(pg_company_id, service_key)
+            pg_name = PG_NAME_CACHE.get(pg_company_id) or get_pg_name(pg_company_id, service_key)
             summary_rows.append(
                 {
                     "pg_name": pg_name,
