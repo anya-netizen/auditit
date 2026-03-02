@@ -10,7 +10,8 @@ BASE_URL = "https://dawavorderpatient-prod-bdfncsb7dwe9fdd3.eastus-01.azurewebsi
 ENTITY_BASE_URL = "https://dawaventity-prod-dfckf6d0h0bbh9bt.eastus-01.azurewebsites.net"
 CREATED_BY = "system"
 PG_NAME_CACHE = {}
-MAX_WORKERS = 6
+MAX_WORKERS = 7
+JOBS_LIMIT = 20
 MONTH_OPTIONS = [
     "January",
     "February",
@@ -211,7 +212,7 @@ def fetch_jobs_status():
         response = requests.get(jobs_url, headers=headers, timeout=60)
         payload = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
         jobs = payload.get("jobs", []) if isinstance(payload, dict) else []
-        jobs = jobs[:10]
+        jobs = jobs[:JOBS_LIMIT]
 
         # Resolve unique PG names in parallel to speed up jobs rendering.
         unique_pg_ids = {
