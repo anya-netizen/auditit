@@ -6,7 +6,9 @@ import requests
 from flask import Flask, render_template_string, request
 
 BASE_URL = "https://dawavorderpatient-prod-bdfncsb7dwe9fdd3.eastus-01.azurewebsites.net"
+ENTITY_BASE_URL = "https://dawaventity-prod-dfckf6d0h0bbh9bt.eastus-01.azurewebsites.net"
 CREATED_BY = "system"
+PG_NAME_CACHE = {}
 MONTH_OPTIONS = [
     "January",
     "February",
@@ -41,10 +43,13 @@ HTML_TEMPLATE = """
     h1 { margin-top: 0; font-size: 24px; }
     label { display: block; margin: 12px 0 6px; font-weight: 600; }
     input, select { width: 100%; padding: 10px; border: 1px solid #c9cfdb; border-radius: 8px; font-size: 14px; }
-    button { margin-top: 16px; padding: 10px 16px; border: 0; border-radius: 8px; background: #2563eb; color: white; font-weight: 700; cursor: pointer; }
+    button { margin-top: 16px; margin-right: 8px; padding: 10px 16px; border: 0; border-radius: 8px; background: #2563eb; color: white; font-weight: 700; cursor: pointer; }
     .message { background: #0f172a; color: #e2e8f0; padding: 14px; border-radius: 8px; margin-top: 8px; }
     .error { color: #b91c1c; font-weight: 700; margin-top: 14px; }
     .meta { margin: 10px 0; color: #374151; }
+    table { width: 100%; border-collapse: collapse; margin-top: 14px; }
+    th, td { border: 1px solid #e5e7eb; padding: 10px; text-align: left; }
+    th { background: #f3f4f6; }
   </style>
 </head>
 <body>
@@ -68,7 +73,8 @@ HTML_TEMPLATE = """
         {% endfor %}
       </select>
 
-      <button type="submit">Run Audit</button>
+      <button type="submit" name="action" value="run_audit">Run Audit</button>
+      <button type="submit" name="action" value="jobs_status">Get Jobs Status</button>
     </form>
 
     {% if error %}
@@ -79,6 +85,28 @@ HTML_TEMPLATE = """
       <div class="meta"><strong>Status Code:</strong> {{ status_code }}</div>
       <div><strong>Message:</strong></div>
       <div class="message">{{ response_message }}</div>
+    {% endif %}
+
+    {% if jobs_status %}
+      <div class="meta"><strong>Jobs Status:</strong> {{ jobs_status|length }} records</div>
+      <table>
+        <thead>
+          <tr>
+            <th>PG Name</th>
+            <th>CPO Month</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for job in jobs_status %}
+            <tr>
+              <td>{{ job.pg_name }}</td>
+              <td>{{ job.cpo_month }}</td>
+              <td>{{ job.status }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     {% endif %}
   </div>
 </body>
@@ -105,10 +133,41 @@ for env_path in ENV_PATHS:
 app = Flask(__name__)
 
 
-def run_full_audit(pg_company_id: str, cpo_month: str):
+def get_service_key():
     service_key = os.getenv("SERVICE_KEY", "").strip()
     if not service_key:
-        return None, "", "SERVICE_KEY is missing. Set it in local .env or Vercel Environment Variables."
+        return "", "SERVICE_KEY is missing. Set it in local .env or Vercel Environment Variables."
+    return service_key, None
+
+
+def get_pg_name(pg_company_id: str, service_key: str):
+    if not pg_company_id:
+        return "Unknown PG"
+    if pg_company_id in PG_NAME_CACHE:
+        return PG_NAME_CACHE[pg_company_id]
+
+    headers = {"accept": "*/*", "x-service-key": service_key}
+    entity_url = f"{ENTITY_BASE_URL}/api/Entity/{pg_company_id}"
+    params = {"EntityType": "PRACTICE"}
+
+    pg_name = pg_company_id
+    try:
+        response = requests.get(entity_url, headers=headers, params=params, timeout=60)
+        if response.ok:
+            data = response.json()
+            if isinstance(data, dict):
+                pg_name = str(data.get("name") or pg_company_id)
+    except Exception:
+        pg_name = pg_company_id
+
+    PG_NAME_CACHE[pg_company_id] = pg_name
+    return pg_name
+
+
+def run_full_audit(pg_company_id: str, cpo_month: str):
+    service_key, service_key_error = get_service_key()
+    if service_key_error:
+        return None, "", service_key_error
 
     url = f"{BASE_URL}/api/Auditor/run-full-audit"
     params = {
@@ -133,6 +192,36 @@ def run_full_audit(pg_company_id: str, cpo_month: str):
         return None, "", f"Request failed: {exc}"
 
 
+def fetch_jobs_status():
+    service_key, service_key_error = get_service_key()
+    if service_key_error:
+        return None, [], service_key_error
+
+    headers = {"accept": "*/*", "x-service-key": service_key}
+    jobs_url = f"{BASE_URL}/api/Auditor/jobs"
+
+    try:
+        response = requests.get(jobs_url, headers=headers, timeout=60)
+        payload = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+        jobs = payload.get("jobs", []) if isinstance(payload, dict) else []
+
+        summary_rows = []
+        for job in jobs:
+            pg_company_id = str(job.get("pgCompanyId") or "").strip()
+            pg_name = get_pg_name(pg_company_id, service_key)
+            summary_rows.append(
+                {
+                    "pg_name": pg_name,
+                    "cpo_month": str(job.get("cpoMonth") or ""),
+                    "status": str(job.get("status") or ""),
+                }
+            )
+
+        return response.status_code, summary_rows, None
+    except requests.RequestException as exc:
+        return None, [], f"Request failed: {exc}"
+
+
 @app.route("/", methods=["GET", "POST"])
 def home():
     now = datetime.now()
@@ -146,15 +235,19 @@ def home():
     selected_year = default_year
     status_code = None
     response_message = ""
+    jobs_status = []
     error = None
 
     if request.method == "POST":
+        action = request.form.get("action", "").strip()
         pg_company_id = request.form.get("pgCompanyId", "").strip()
         selected_month = request.form.get("cpoMonthMonth", "").strip()
         selected_year = request.form.get("cpoMonthYear", "").strip()
         cpo_month = f"{selected_month} {selected_year}".strip()
 
-        if not pg_company_id or not selected_month or not selected_year:
+        if action == "jobs_status":
+            status_code, jobs_status, error = fetch_jobs_status()
+        elif not pg_company_id or not selected_month or not selected_year:
             error = "Please enter PG Company ID and choose CPO month/year."
         else:
             status_code, response_message, error = run_full_audit(pg_company_id, cpo_month)
@@ -169,6 +262,7 @@ def home():
         selected_year=selected_year,
         status_code=status_code,
         response_message=response_message,
+        jobs_status=jobs_status,
         error=error,
     )
 
