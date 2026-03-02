@@ -1,5 +1,6 @@
 import os
 import re
+import csv
 from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -36,6 +37,7 @@ ENV_PATHS = [
     Path(__file__).resolve().parent / ".env",
     Path(__file__).resolve().parent.parent / ".env",
 ]
+PRACTICE_CSV_PATH = Path(__file__).resolve().parent / "practice_entities.csv"
 
 HTML_TEMPLATE = """
 <!doctype html>
@@ -63,16 +65,15 @@ HTML_TEMPLATE = """
   <div class="container">
     <h1>Run Full Audit</h1>
     <form method="post">
-      <label for="pgCompanyId">PG Company ID</label>
-      <input
-        id="pgCompanyId"
-        name="pgCompanyId"
-        value="{{ pg_company_id }}"
-        placeholder="e.g. f6464e98-d46b-4c7a-a9bc-254c02aa8e1c"
-        pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-        title="Enter a valid GUID like f6464e98-d46b-4c7a-a9bc-254c02aa8e1c"
-        required
-      />
+      <label for="practiceName">PG Name</label>
+      <select id="practiceName" name="practiceName" required>
+        <option value="">Select a PG Name</option>
+        {% for option in practice_options %}
+          <option value="{{ option.name }}" {% if option.name == selected_practice_name %}selected{% endif %}>
+            {{ option.name }}
+          </option>
+        {% endfor %}
+      </select>
 
       <label for="cpoMonthMonth">CPO Month</label>
       <select id="cpoMonthMonth" name="cpoMonthMonth" required>
@@ -151,6 +152,27 @@ for env_path in ENV_PATHS:
     load_env_file(env_path)
 
 app = Flask(__name__)
+
+
+def load_practice_options():
+    options = []
+    if not PRACTICE_CSV_PATH.exists():
+        return options
+
+    with PRACTICE_CSV_PATH.open("r", encoding="utf-8", newline="") as csv_file:
+        reader = csv.DictReader(csv_file)
+        for row in reader:
+            practice_id = (row.get("id") or "").strip()
+            practice_name = (row.get("name") or "").strip()
+            if practice_id and practice_name:
+                options.append({"id": practice_id, "name": practice_name})
+
+    options.sort(key=lambda item: item["name"].lower())
+    return options
+
+
+PRACTICE_OPTIONS = load_practice_options()
+PRACTICE_NAME_TO_ID = {item["name"]: item["id"] for item in PRACTICE_OPTIONS}
 
 
 def get_service_key():
@@ -275,7 +297,7 @@ def home():
     default_year = str(now.year)
     year_options = [str(y) for y in range(now.year - 2, now.year + 4)]
 
-    pg_company_id = ""
+    selected_practice_name = ""
     cpo_month = f"{default_month} {default_year}"
     selected_month = default_month
     selected_year = default_year
@@ -290,13 +312,16 @@ def home():
         if action == "jobs_status":
             _, jobs_status, error = fetch_jobs_status()
         else:
-            pg_company_id = request.form.get("pgCompanyId", "").strip()
+            selected_practice_name = request.form.get("practiceName", "").strip()
             selected_month = request.form.get("cpoMonthMonth", "").strip()
             selected_year = request.form.get("cpoMonthYear", "").strip()
             cpo_month = f"{selected_month} {selected_year}".strip()
+            pg_company_id = PRACTICE_NAME_TO_ID.get(selected_practice_name, "")
 
-            if not pg_company_id or not selected_month or not selected_year:
-                error = "Please enter PG Company ID and choose CPO month/year."
+            if not selected_practice_name or not selected_month or not selected_year:
+                error = "Please select PG Name and choose CPO month/year."
+            elif not pg_company_id:
+                error = "Unable to map selected PG Name to PG Company ID."
             elif not is_valid_guid(pg_company_id):
                 error = "PG Company ID must be a valid GUID."
             else:
@@ -304,7 +329,8 @@ def home():
 
     return render_template_string(
         HTML_TEMPLATE,
-        pg_company_id=pg_company_id,
+        selected_practice_name=selected_practice_name,
+        practice_options=PRACTICE_OPTIONS,
         cpo_month=cpo_month,
         month_options=MONTH_OPTIONS,
         year_options=year_options,
