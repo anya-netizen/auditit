@@ -74,6 +74,11 @@ HTML_TEMPLATE = """
       </select>
 
       <button type="submit" name="action" value="run_audit">Run Audit</button>
+    </form>
+
+    <hr style="margin: 24px 0; border: 0; border-top: 1px solid #e5e7eb;" />
+    <h2 style="margin: 0 0 8px 0; font-size: 20px;">Jobs Status</h2>
+    <form method="post">
       <button type="submit" name="action" value="jobs_status">Get Jobs Status</button>
     </form>
 
@@ -81,13 +86,13 @@ HTML_TEMPLATE = """
       <div class="error">{{ error }}</div>
     {% endif %}
 
-    {% if status_code is not none %}
-      <div class="meta"><strong>Status Code:</strong> {{ status_code }}</div>
+    {% if audit_status_code is not none %}
+      <div class="meta"><strong>Status Code:</strong> {{ audit_status_code }}</div>
       <div><strong>Message:</strong></div>
       <div class="message">{{ response_message }}</div>
     {% endif %}
 
-    {% if jobs_status %}
+    {% if jobs_status is not none %}
       <div class="meta"><strong>Jobs Status:</strong> {{ jobs_status|length }} records</div>
       <table>
         <thead>
@@ -204,6 +209,7 @@ def fetch_jobs_status():
         response = requests.get(jobs_url, headers=headers, timeout=60)
         payload = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
         jobs = payload.get("jobs", []) if isinstance(payload, dict) else []
+        jobs = jobs[:10]
 
         summary_rows = []
         for job in jobs:
@@ -233,24 +239,26 @@ def home():
     cpo_month = f"{default_month} {default_year}"
     selected_month = default_month
     selected_year = default_year
-    status_code = None
+    audit_status_code = None
     response_message = ""
-    jobs_status = []
+    jobs_status = None
     error = None
 
     if request.method == "POST":
         action = request.form.get("action", "").strip()
-        pg_company_id = request.form.get("pgCompanyId", "").strip()
-        selected_month = request.form.get("cpoMonthMonth", "").strip()
-        selected_year = request.form.get("cpoMonthYear", "").strip()
-        cpo_month = f"{selected_month} {selected_year}".strip()
 
         if action == "jobs_status":
-            status_code, jobs_status, error = fetch_jobs_status()
-        elif not pg_company_id or not selected_month or not selected_year:
-            error = "Please enter PG Company ID and choose CPO month/year."
+            _, jobs_status, error = fetch_jobs_status()
         else:
-            status_code, response_message, error = run_full_audit(pg_company_id, cpo_month)
+            pg_company_id = request.form.get("pgCompanyId", "").strip()
+            selected_month = request.form.get("cpoMonthMonth", "").strip()
+            selected_year = request.form.get("cpoMonthYear", "").strip()
+            cpo_month = f"{selected_month} {selected_year}".strip()
+
+            if not pg_company_id or not selected_month or not selected_year:
+                error = "Please enter PG Company ID and choose CPO month/year."
+            else:
+                audit_status_code, response_message, error = run_full_audit(pg_company_id, cpo_month)
 
     return render_template_string(
         HTML_TEMPLATE,
@@ -260,7 +268,7 @@ def home():
         year_options=year_options,
         selected_month=selected_month,
         selected_year=selected_year,
-        status_code=status_code,
+        audit_status_code=audit_status_code,
         response_message=response_message,
         jobs_status=jobs_status,
         error=error,
