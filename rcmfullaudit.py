@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -12,6 +13,9 @@ CREATED_BY = "system"
 PG_NAME_CACHE = {}
 MAX_WORKERS = 7
 JOBS_LIMIT = 20
+GUID_PATTERN = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 MONTH_OPTIONS = [
     "January",
     "February",
@@ -60,7 +64,15 @@ HTML_TEMPLATE = """
     <h1>Run Full Audit</h1>
     <form method="post">
       <label for="pgCompanyId">PG Company ID</label>
-      <input id="pgCompanyId" name="pgCompanyId" value="{{ pg_company_id }}" placeholder="e.g. 03657233-8677-4c81-92c8-c19c3f64fc84" required />
+      <input
+        id="pgCompanyId"
+        name="pgCompanyId"
+        value="{{ pg_company_id }}"
+        placeholder="e.g. f6464e98-d46b-4c7a-a9bc-254c02aa8e1c"
+        pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+        title="Enter a valid GUID like f6464e98-d46b-4c7a-a9bc-254c02aa8e1c"
+        required
+      />
 
       <label for="cpoMonthMonth">CPO Month</label>
       <select id="cpoMonthMonth" name="cpoMonthMonth" required>
@@ -148,9 +160,13 @@ def get_service_key():
     return service_key, None
 
 
+def is_valid_guid(value: str) -> bool:
+    return bool(GUID_PATTERN.fullmatch((value or "").strip()))
+
+
 def get_pg_name(pg_company_id: str, service_key: str):
     if not pg_company_id:
-        return "Unknown PG"
+        return ""
     if pg_company_id in PG_NAME_CACHE:
         return PG_NAME_CACHE[pg_company_id]
 
@@ -237,6 +253,8 @@ def fetch_jobs_status():
         for job in jobs:
             pg_company_id = str(job.get("pgCompanyId") or "").strip()
             pg_name = PG_NAME_CACHE.get(pg_company_id) or get_pg_name(pg_company_id, service_key)
+            if not pg_name:
+                pg_name = pg_company_id
             summary_rows.append(
                 {
                     "pg_name": pg_name,
@@ -279,6 +297,8 @@ def home():
 
             if not pg_company_id or not selected_month or not selected_year:
                 error = "Please enter PG Company ID and choose CPO month/year."
+            elif not is_valid_guid(pg_company_id):
+                error = "PG Company ID must be a valid GUID."
             else:
                 audit_status_code, response_message, error = run_full_audit(pg_company_id, cpo_month)
 
