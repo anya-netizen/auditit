@@ -66,14 +66,19 @@ HTML_TEMPLATE = """
     <h1>Run Full Audit</h1>
     <form method="post">
       <label for="practiceName">PG Name</label>
-      <select id="practiceName" name="practiceName" required>
-        <option value="">Select a PG Name</option>
+      <input
+        id="practiceName"
+        name="practiceName"
+        value="{{ selected_practice_name }}"
+        list="practiceNames"
+        placeholder="Type to search PG Name"
+        required
+      />
+      <datalist id="practiceNames">
         {% for option in practice_options %}
-          <option value="{{ option.name }}" {% if option.name == selected_practice_name %}selected{% endif %}>
-            {{ option.name }}
-          </option>
+          <option value="{{ option.name }}"></option>
         {% endfor %}
-      </select>
+      </datalist>
 
       <label for="cpoMonthMonth">CPO Month</label>
       <select id="cpoMonthMonth" name="cpoMonthMonth" required>
@@ -173,6 +178,7 @@ def load_practice_options():
 
 PRACTICE_OPTIONS = load_practice_options()
 PRACTICE_NAME_TO_ID = {item["name"]: item["id"] for item in PRACTICE_OPTIONS}
+PRACTICE_NAME_TO_ID_CASEFOLD = {item["name"].casefold(): item["id"] for item in PRACTICE_OPTIONS}
 
 
 def get_service_key():
@@ -317,6 +323,8 @@ def home():
             selected_year = request.form.get("cpoMonthYear", "").strip()
             cpo_month = f"{selected_month} {selected_year}".strip()
             pg_company_id = PRACTICE_NAME_TO_ID.get(selected_practice_name, "")
+            if not pg_company_id:
+                pg_company_id = PRACTICE_NAME_TO_ID_CASEFOLD.get(selected_practice_name.casefold(), "")
 
             if not selected_practice_name or not selected_month or not selected_year:
                 error = "Please select PG Name and choose CPO month/year."
